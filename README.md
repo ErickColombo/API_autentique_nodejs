@@ -1,212 +1,174 @@
-# Autentique — Envio de PDFs em Lote v6
+# Autentique -> Envio em lote de Email com PDF
 
-Automação Node.js própria usando diretamente a API GraphQL v2 da Autentique.
-A versão 6 combina **segurança operacional, retomada após falhas e economia de chamadas cobradas**.
+Automação em **Node.js** para envio de PDFs em lote pela **API da Autentique**, com foco em segurança, prevenção de duplicidades e redução de chamadas desnecessárias à API.
 
-## O que foi implementado
+## Principais recursos
 
-1. **Reconciliação com a Autentique antes de criar** em Produção, usando uma consulta de documentos recentes em cache durante a execução.
-2. **Escrita atômica do JSON** com arquivo temporário e rename.
-3. **Ctrl+C seguro**: um Ctrl+C impede novos documentos e deixa a etapa atual terminar quando possível.
-4. **Lock** contra duas execuções simultâneas.
-5. **Validação do PDF baixado**: HTTP 2xx, tamanho > 0 e gravação temporária.
-6. **SHA-256** do PDF assinado e do PDF original, registrado no JSON.
-7. **Logs** em `dados/envio.log`.
-8. **`--dry-run`** para visualizar o lote sem criar documentos.
-9. **Checkpoint imediato**: assim que a API devolve o ID, ele é salvo em `processando`.
-10. **Redução de consultas**: documento novo é assinado diretamente pelo ID retornado; depois é feita uma única consulta final contendo assinatura + PDF assinado.
+- Envio de PDFs em lote.
+- Validação da relação PDF → destinatário.
+- Assinatura automática pela conta configurada.
+- Download do PDF assinado.
+- Checkpoint persistente para recuperação após falhas.
+- Escrita atômica dos arquivos de controle.
+- Proteção contra duas execuções simultâneas.
+- Tratamento seguro de `Ctrl+C`.
+- Reconciliação antes da criação de documentos.
+- Validação e SHA-256 dos PDFs baixados.
+- Logs de execução.
+- `--dry-run` para simulação.
+- Estratégia de chamadas otimizada para reduzir custos da API.
 
-> O objetivo é minimizar duplicidades e custos, sem prometer risco matematicamente zero: existe uma pequena janela entre a criação remota e o checkpoint local. A reconciliação reduz essa janela.
+## Requisitos
 
-## Economia de API
+- Node.js
+- npm
+- Conta Autentique
+- Token da API
+- PDFs para envio
+- `relação.csv`
 
-A documentação oficial mostra a listagem de documentos em páginas, com exemplo de `limit: 60`, e recomenda evitar polling frequente. A v6 não faz uma listagem de 60 documentos para cada PDF. Ela carrega uma página em cache por execução e usa o checkpoint local como principal mecanismo de retomada.
+Instale as dependências:
 
-Para um documento **novo**, o caminho normal fica aproximadamente:
-
-```text
-criação → assinatura → 1 consulta final → download
+```bash
+npm install
 ```
 
-Em uma retomada de `processando`, pode haver uma consulta adicional para descobrir se a assinatura já ocorreu.
+## Configuração
 
-### Referência de custo para 300 documentos
+Crie `.env` a partir de `.env.example`:
 
-Com os valores de referência usados no projeto:
+```env
+AUTENTIQUE_TOKEN=SEU_TOKEN
+SIGNER_EMAIL=seu-email@dominio.com
+SOURCE_DIR=C:\caminho\dos\pdfs
+RELATION_FILE=relação.csv
 
-- criação: 300 × R$ 0,06 = **R$ 18,00**;
-- dois signatários por e-mail, assumindo cobrança para ambos: 300 × 2 × R$ 0,013 = **R$ 7,80**;
-- subtotal: **R$ 25,80**;
-- consultas de documentos: custo adicional conforme a quantidade efetivamente retornada/cobrada pela conta.
+AUTENTIQUE_URL=https://api.autentique.com.br/v2/graphql
 
-Os valores devem ser conferidos no painel/contrato antes do lote, pois preços comerciais podem mudar.
+DELAY_MS=10000
+MAX_RETRIES=3
+RETRY_BASE_MS=15000
 
-## Fluxo seguro
-
-```text
-PDF local
-  ↓
-validação
-  ↓
-reconciliação Produção (cache)
-  ↓
-criação na Autentique
-  ↓
-checkpoint imediato: processando + documentId
-  ↓
-assinatura automática
-  ↓
-consulta final: assinatura + PDF assinado
-  ↓
-download .tmp
-  ↓
-HTTP 2xx + tamanho + SHA-256
-  ↓
-rename para PDF final
-  ↓
-enviados
+SIGNED_DIR=dados\assinados
 ```
 
-## Estado persistente
+## Relação dos documentos
+
+O `relação.csv` utiliza `;` como separador e não precisa de cabeçalho:
+
+```text
+arquivo1.pdf;cliente1@email.com
+arquivo2.pdf;cliente2@email.com
+arquivo2.pdf;cliente3@email.com
+arquivo3.pdf;cliente4@email.com
+```
+
+O nome do PDF deve corresponder exatamente ao arquivo existente em `SOURCE_DIR`.
+
+## Uso
+
+### Validar
+
+```bash
+npm run validar
+```
+
+Verifica a relação, PDFs, e-mails, arquivos ausentes, extras e duplicidades.
+
+### Simular sem enviar
+
+```bash
+npm run dry-run
+```
+
+Não cria documentos na Autentique.
+
+### Testar no Sandbox
+
+```bash
+npm run teste -- --limite=1
+```
+
+Recomendado antes da Produção.
+
+### Testar 1 documento em Produção
+
+```bash
+npm run enviar -- --limite=1
+```
+
+### Enviar um lote
+
+```bash
+npm run enviar -- --limite=10
+```
+
+### Enviar todos os pendentes
+
+```bash
+npm run enviar
+```
+
+### Consultar status
+
+```bash
+npm run status
+```
+
+## Segurança e recuperação
+
+Após a criação, o ID retornado pela Autentique é salvo imediatamente no estado local.
+
+Se houver interrupção, uma nova execução pode continuar a partir do documento já criado, evitando uma nova criação desnecessária.
+
+Estados:
 
 ```text
 dados/producao.json
 dados/sandbox.json
 ```
 
-Cada estado possui:
-
-- `enviados`: concluídos;
-- `processando`: documento já criado remotamente e ainda não concluído;
-- `erros`: última falha registrada.
-
-Se o programa for interrompido depois da criação, uma nova execução encontra `processando.documentId` e continua daquele documento, em vez de criar outro imediatamente.
-
-## Ctrl+C
-
-Primeiro Ctrl+C:
-
-- não inicia outro documento;
-- aguarda a etapa atual terminar quando possível;
-- mantém o checkpoint salvo;
-- libera o lock ao sair.
-
-Segundo Ctrl+C força a saída.
-
-## Lock
-
-Durante `teste` e `enviar`, o programa cria:
+PDFs assinados:
 
 ```text
-dados/.envio.lock
+dados/assinados/
 ```
 
-Uma segunda execução é bloqueada.
-
-## PDF e hash
-
-O PDF assinado é salvo primeiro como `.tmp`. Depois de validar HTTP e tamanho, é calculado SHA-256 e o arquivo é renomeado para o nome definitivo.
-
-O JSON guarda:
-
-```json
-"signedPdf": {
-  "size": 123456,
-  "sha256": "..."
-},
-"sourcePdfSha256": "..."
-```
-
-## Logs
-
-Arquivo:
+Logs:
 
 ```text
 dados/envio.log
 ```
 
-Cada linha recebe timestamp ISO.
-
-## Dry-run
-
-Não cria documentos:
-
-```bash
-npm run enviar -- --limite=10 --dry-run
-```
-
-Também funciona no Sandbox:
-
-```bash
-npm run teste -- --limite=10 --dry-run
-```
-
-## Instalação
-
-```bash
-npm install
-```
-
-Crie `.env` a partir de `.env.example`:
-
-```env
-AUTENTIQUE_TOKEN=SEU_TOKEN
-SIGNER_EMAIL=atendimento1@dgleiloes.com.br
-SOURCE_DIR=C:\1 - API Autentique\RELAÇÃO ENVIO
-RELATION_FILE=relação.csv
-AUTENTIQUE_URL=https://api.autentique.com.br/v2/graphql
-DELAY_MS=10000
-MAX_RETRIES=3
-RETRY_BASE_MS=15000
-SIGNED_DIR=dados\assinados
-```
-
-Nunca versione `.env`.
-
-## relação.csv
-
-Sem cabeçalho e separado por `;`:
+## Estrutura
 
 ```text
-SAJ-001 - ERICK.pdf;cliente@gmail.com
-SAJ-002 - ERICK.pdf;cliente2@gmail.com
-```
+src/
+├── index.js
+├── config.js
+├── arquivos.js
+├── autentique.js
+└── storage.js
 
-## Comandos
-
-```bash
-npm run validar
-npm run teste -- --limite=1
-npm run enviar -- --limite=1
-npm run enviar -- --limite=10
-npm run enviar
-npm run status
-npm run enviar -- --limite=10 --dry-run
+dados/
+├── producao.json
+├── sandbox.json
+├── envio.log
+└── assinados/
 ```
 
 ## API
+
+**Autentique API**
 
 Endpoint:
 
 `https://api.autentique.com.br/v2/graphql`
 
-Documentação oficial:
+Documentação:
 
 `https://docs.autentique.com.br/api/2`
 
-A documentação também informa limite de 60 requisições por minuto.
+---
 
-## Arquivos principais
-
-```text
-src/index.js       fluxo principal, retry, Ctrl+C, dry-run e logs
-src/autentique.js  GraphQL, criação, assinatura, consulta e download
-src/storage.js     estado e escrita atômica
-src/lock.js        lock de execução
-src/arquivos.js    CSV e validação
-src/config.js      configuração
-
-dados/*.json       checkpoints e histórico
-dados/assinados/  PDFs assinados
-dados/envio.log    log operacional
-```
+**Uso interno — automação de envio de documentos.**
