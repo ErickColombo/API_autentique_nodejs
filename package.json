@@ -1,0 +1,16 @@
+{
+  "name": "autentique-envio-lote-v6-seguro-economico",
+  "version": "6.0.0",
+  "private": true,
+  "scripts": {
+    "validar": "node src/index.js validar",
+    "teste": "node src/index.js teste",
+    "enviar": "node src/index.js enviar",
+    "status": "node src/index.js status"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "dotenv": "^16.4.7",
+    "form-data": "^4.0.2"
+  }
+}

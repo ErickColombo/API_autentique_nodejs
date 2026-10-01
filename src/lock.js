@@ -1,0 +1,3 @@
+const fs=require("fs");const path=require("path");const lockPath=path.join(__dirname,"..","dados",".envio.lock");
+function acquire(){fs.mkdirSync(path.dirname(lockPath),{recursive:true});try{const fd=fs.openSync(lockPath,"wx");fs.writeFileSync(fd,JSON.stringify({pid:process.pid,startedAt:new Date().toISOString()}));fs.closeSync(fd);}catch{let info="";try{info=fs.readFileSync(lockPath,"utf8");}catch{}throw new Error(`Já existe outra execução ativa. Lock: ${info||lockPath}`);}let released=false;return()=>{if(!released){released=true;try{fs.rmSync(lockPath,{force:true});}catch{}}};}
+module.exports={acquire};
