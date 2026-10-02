@@ -1,6 +1,6 @@
 {
-  "name": "autentique-envio-lote-v6-seguro-economico",
-  "version": "6.0.0",
+  "name": "autentique-envio-lote",
+  "version": "3.0.0",
   "private": true,
   "scripts": {
     "validar": "node src/index.js validar",
